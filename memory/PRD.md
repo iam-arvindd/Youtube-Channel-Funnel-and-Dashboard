@@ -18,8 +18,15 @@ Solo creator building a faceless finance YouTube channel (India + global English
 - Premium light-theme UI (Bone white + Deep Pine #00594C + Terracotta accent), Cabinet Grotesk + Manrope fonts, glassmorphism, framer-motion micro-interactions
 
 ## What's Been Implemented (Feb 2026)
-- [DATE: 2026-02] Backend: JWT auth, Anthropic key encrypted storage, ideas/videos/analytics/affiliates CRUD, Claude streaming chat endpoint
-- [DATE: 2026-02] Frontend: Login, Dashboard KPIs, Idea Vault (50 seeds), Pipeline Kanban, Analytics, Affiliates, Calendar, Settings, embedded Claude chat panel
+- [2026-02] Backend: JWT auth, Anthropic key encrypted storage, ideas/videos/analytics/affiliates CRUD, Claude streaming chat
+- [2026-02] Frontend: Login, Dashboard, Vault (50), Pipeline Kanban with chat drawer, Analytics, Affiliates, Calendar, Settings
+- [2026-02] Object storage (Emergent) uploads for thumbnails + voiceover; script export (.txt/.docx)
+- [2026-02] YouTube Data API (key-based): per-video sync + bulk "Sync all from YouTube"
+- [2026-02] Gemini Nano Banana thumbnail generator (optional, AI-tagged)
+- [2026-02] Resend email digest with on/off toggle + send-now
+- [2026-02] Thumbnail A/B tracker (AI vs Human variants, CTR auto-compute, winner highlight)
+- [2026-02] YouTube Analytics API (OAuth 2.0): retention curve + traffic sources + summary metrics per video
+- [2026-02] DEPLOYMENT: passed static analysis, ready to ship
 
 ## Prioritized Backlog
 ### P1 (next)
