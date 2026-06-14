@@ -57,10 +57,6 @@ function KeyCard({ title, subtitle, keyType, placeholder, helpUrl, icon: Icon, a
   );
 }
 
-function DigestCard() {  const [d, setD] = useState({ enabled: false, email: "" });
-  const [busy, setBusy] = useState(false);
-  const [sending, setSending] = useState(false);
-
 function YTConnectCard() {
   const [status, setStatus] = useState({ connected: false });
   const [busy, setBusy] = useState(false);
@@ -110,6 +106,10 @@ function YTConnectCard() {
 }
 
 
+function DigestCard() {
+  const [d, setD] = useState({ enabled: false, email: "" });
+  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
   const load = () => api.get("/settings/digest").then(r=>setD(r.data));
   useEffect(()=>{ load(); }, []);
   const save = async () => {
