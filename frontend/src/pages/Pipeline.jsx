@@ -289,6 +289,7 @@ function VideoDrawer({ video, onClose }) {
         <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
           <ExportButtons videoId={v.id} hasScript={!!v.script}/>
           <YouTubeSync videoId={v.id} youtubeUrl={v.youtube_url}/>
+          <YTAnalyticsPanel videoId={v.id} youtubeUrl={v.youtube_url}/>
           <ThumbnailGen videoId={v.id} title={v.title} onDone={(url)=>setV({...v, thumbnail_url:url})}/>
           <ThumbnailAB videoId={v.id}/>
           <UploadRow videoId={v.id} kind="thumbnail" label="Thumbnail (PNG/JPG/WEBP)" accept="image/png,image/jpeg,image/webp" currentUrl={v.thumbnail_url} onDone={(url)=>setV({...v, thumbnail_url:url})}/>
@@ -547,6 +548,71 @@ function ThumbCard({ thumb, token, isWinner, onUpdate }) {
         </div>
         <button data-testid={`save-stats-${thumb.id}`} onClick={save} className="w-full btn-primary !py-1.5 text-xs">Update stats</button>
       </div>
+    </div>
+  );
+}
+
+
+function YTAnalyticsPanel({ videoId, youtubeUrl }) {
+  const [data, setData] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const fetchData = async () => {
+    if (!youtubeUrl) return toast.error("Set YouTube URL first");
+    setBusy(true);
+    try {
+      const r = await api.get(`/videos/${videoId}/yt-analytics`);
+      setData(r.data); toast.success("Analytics loaded");
+    } catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="p-4 rounded-xl bg-gradient-to-br from-[#FEF2F2] to-[#FFF7ED] border border-[#DC2626]/20">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-bold text-[#DC2626]">📊 YouTube Analytics (retention + traffic)</span>
+        <button data-testid="yt-analytics-fetch" onClick={fetchData} disabled={busy} className="text-xs font-bold text-[#DC2626] uppercase tracking-[0.1em] disabled:opacity-50">
+          {busy ? "Loading…" : data ? "Refresh" : "Fetch"}
+        </button>
+      </div>
+      {data && (
+        <div className="mt-3 space-y-3">
+          {data.summary && Object.keys(data.summary).length > 0 && (
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              {Object.entries({views:"Views", subscribersGained:"+Subs", likes:"Likes", comments:"Comments", shares:"Shares", averageViewDuration:"Avg Sec"}).map(([k, label]) => (
+                data.summary[k] !== undefined && (
+                  <div key={k} className="bg-white rounded-lg p-2 border border-black/5">
+                    <div className="text-[9px] uppercase tracking-[0.1em] text-[#8A8A8A]">{label}</div>
+                    <div className="font-mono font-bold text-[#0A0A0A]">{typeof data.summary[k] === 'number' ? data.summary[k].toLocaleString() : data.summary[k]}</div>
+                  </div>
+                )
+              ))}
+            </div>
+          )}
+          {data.retention_curve?.length > 0 && (
+            <div className="bg-white rounded-lg p-3 border border-black/5">
+              <div className="text-[10px] uppercase tracking-[0.1em] font-bold text-[#5C5C5C] mb-2">Retention curve</div>
+              <div className="h-24 flex items-end gap-px">
+                {data.retention_curve.map((p, i) => (
+                  <div key={i} className="flex-1 bg-[#DC2626] rounded-t" style={{height: `${Math.min(100, (p.audienceWatchRatio||0)*100)}%`, opacity: 0.5 + (p.audienceWatchRatio||0)*0.5}} title={`${Math.round((p.elapsedVideoTimeRatio||0)*100)}% → ${Math.round((p.audienceWatchRatio||0)*100)}% watching`}/>
+                ))}
+              </div>
+              <div className="flex justify-between text-[9px] text-[#8A8A8A] mt-1"><span>Start</span><span>End</span></div>
+            </div>
+          )}
+          {data.traffic_sources?.length > 0 && (
+            <div className="bg-white rounded-lg p-3 border border-black/5">
+              <div className="text-[10px] uppercase tracking-[0.1em] font-bold text-[#5C5C5C] mb-2">Top traffic sources</div>
+              <div className="space-y-1">
+                {data.traffic_sources.slice(0,5).map((s, i) => (
+                  <div key={i} className="flex justify-between text-xs">
+                    <span className="text-[#5C5C5C]">{s.insightTrafficSourceType}</span>
+                    <span className="font-mono font-bold">{(s.views||0).toLocaleString()} views</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

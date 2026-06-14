@@ -57,10 +57,59 @@ function KeyCard({ title, subtitle, keyType, placeholder, helpUrl, icon: Icon, a
   );
 }
 
-function DigestCard() {
-  const [d, setD] = useState({ enabled: false, email: "" });
+function DigestCard() {  const [d, setD] = useState({ enabled: false, email: "" });
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
+
+function YTConnectCard() {
+  const [status, setStatus] = useState({ connected: false });
+  const [busy, setBusy] = useState(false);
+  const load = () => api.get("/youtube/oauth/status").then(r => setStatus(r.data));
+  useEffect(() => { load(); }, []);
+  const connect = async () => {
+    setBusy(true);
+    try {
+      const r = await api.get("/youtube/oauth/start");
+      const w = window.open(r.data.auth_url, "yt_oauth", "width=600,height=720");
+      const timer = setInterval(() => {
+        if (w?.closed) { clearInterval(timer); load(); setBusy(false); }
+      }, 1000);
+    } catch (e) { toast.error(formatErr(e.response?.data?.detail)); setBusy(false); }
+  };
+  const disconnect = async () => {
+    if (!window.confirm("Disconnect YouTube Analytics?")) return;
+    await api.delete("/youtube/oauth"); load(); toast.success("Disconnected");
+  };
+  return (
+    <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} className="glass rounded-2xl p-7">
+      <div className="flex items-center gap-3">
+        <div className="w-11 h-11 rounded-xl bg-[#DC2626] grid place-items-center shadow-md">
+          <YoutubeLogo weight="fill" size={20} color="white"/>
+        </div>
+        <div className="flex-1">
+          <h3 className="font-display text-lg font-bold tracking-tight">Connect YouTube Channel</h3>
+          <p className="text-xs text-[#5C5C5C]">Authorize once → unlock retention curves & traffic-source breakdowns.</p>
+        </div>
+        {status.connected && <span className="pill" style={{background:"#10B98122", color:"#10B981"}}><CheckCircle size={11} weight="fill"/> Connected</span>}
+      </div>
+      <div className="mt-4">
+        {status.connected ? (
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-[#5C5C5C]">Authorized {status.connected_at ? new Date(status.connected_at).toLocaleDateString() : ""}</span>
+            <button data-testid="yt-disconnect" onClick={disconnect} className="btn-ghost text-[#EF4444] text-xs">Disconnect</button>
+          </div>
+        ) : (
+          <button data-testid="yt-connect" onClick={connect} disabled={busy} className="btn-accent disabled:opacity-50">
+            {busy ? "Opening Google…" : "Connect YouTube Analytics"}
+          </button>
+        )}
+        <p className="text-[10px] text-[#8A8A8A] mt-3">Requires Client ID & Secret above. Add this redirect URI in your Google Cloud OAuth client: <code className="font-mono text-[#00594C]">{`${process.env.REACT_APP_BACKEND_URL}/api/youtube/oauth/callback`}</code></p>
+      </div>
+    </motion.div>
+  );
+}
+
+
   const load = () => api.get("/settings/digest").then(r=>setD(r.data));
   useEffect(()=>{ load(); }, []);
   const save = async () => {
@@ -115,6 +164,14 @@ export default function Settings() {
 
         <KeyCard title="Resend (Email)" subtitle="Used to send weekly digest emails." keyType="resend"
           placeholder="re_..." helpUrl="https://resend.com/api-keys" icon={EnvelopeSimple} accent="#FF6B4A"/>
+
+        <KeyCard title="YouTube OAuth Client ID" subtitle="Step 1 of YouTube Analytics (retention + traffic sources)." keyType="yt_oauth_client_id"
+          placeholder="123-xxxxx.apps.googleusercontent.com" helpUrl="https://console.cloud.google.com/apis/credentials" icon={YoutubeLogo} accent="#DC2626"/>
+
+        <KeyCard title="YouTube OAuth Client Secret" subtitle="Step 2 of YouTube Analytics." keyType="yt_oauth_client_secret"
+          placeholder="GOCSPX-..." helpUrl="https://console.cloud.google.com/apis/credentials" icon={YoutubeLogo} accent="#DC2626"/>
+
+        <YTConnectCard/>
 
         <DigestCard/>
 

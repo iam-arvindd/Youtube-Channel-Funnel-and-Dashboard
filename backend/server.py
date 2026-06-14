@@ -19,6 +19,9 @@ import base64
 import resend
 import requests
 from googleapiclient.discovery import build as gbuild
+from google_auth_oauthlib.flow import Flow
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleAuthRequest
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Query, Header, Response
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -299,7 +302,7 @@ async def delete_key(user: dict = Depends(get_current_user)):
     return {"status": "removed"}
 
 # ---------- Generic 3rd-party key storage (youtube, resend) ----------
-ALLOWED_KEY_TYPES = {"youtube", "resend"}
+ALLOWED_KEY_TYPES = {"youtube", "resend", "yt_oauth_client_id", "yt_oauth_client_secret"}
 
 class GenericKeyRequest(BaseModel):
     api_key: str
@@ -873,6 +876,157 @@ async def serve_file(path: str, auth: str = Query(None), authorization: str = He
         raise HTTPException(404, "File not found")
     data, ct = get_object(path)
     return Response(content=data, media_type=rec.get("content_type", ct))
+
+# ---------- YouTube OAuth + Analytics API ----------
+YT_OAUTH_SCOPES = [
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
+
+def _backend_origin() -> str:
+    # CORS allows any; we need the public URL for redirect. Use FRONTEND_URL env or compute from request.
+    return os.environ.get("PUBLIC_BACKEND_URL", "")
+
+@api.get("/youtube/oauth/start")
+async def yt_oauth_start(request: Request, user: dict = Depends(get_current_user)):
+    client_id = await get_user_key(user["id"], "yt_oauth_client_id")
+    client_secret = await get_user_key(user["id"], "yt_oauth_client_secret")
+    if not client_id or not client_secret:
+        raise HTTPException(400, "Add YouTube OAuth Client ID and Secret in Settings first")
+    # Build redirect URI from request
+    origin = str(request.base_url).rstrip("/")
+    redirect_uri = f"{origin}/api/youtube/oauth/callback"
+    flow = Flow.from_client_config(
+        {"web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri],
+        }},
+        scopes=YT_OAUTH_SCOPES,
+    )
+    flow.redirect_uri = redirect_uri
+    auth_url, state = flow.authorization_url(access_type="offline", prompt="consent", include_granted_scopes="true")
+    await db.oauth_states.insert_one({"state": state, "user_id": user["id"], "redirect_uri": redirect_uri, "created_at": now_iso()})
+    return {"auth_url": auth_url}
+
+@api.get("/youtube/oauth/callback")
+async def yt_oauth_callback(request: Request):
+    params = dict(request.query_params)
+    state = params.get("state")
+    code = params.get("code")
+    if not state or not code:
+        return Response("Missing state/code", status_code=400)
+    rec = await db.oauth_states.find_one({"state": state})
+    if not rec:
+        return Response("Invalid state", status_code=400)
+    user_id = rec["user_id"]
+    client_id = await get_user_key(user_id, "yt_oauth_client_id")
+    client_secret = await get_user_key(user_id, "yt_oauth_client_secret")
+    flow = Flow.from_client_config(
+        {"web": {
+            "client_id": client_id, "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [rec["redirect_uri"]],
+        }},
+        scopes=YT_OAUTH_SCOPES, state=state,
+    )
+    flow.redirect_uri = rec["redirect_uri"]
+    try:
+        flow.fetch_token(code=code)
+    except Exception as e:
+        return Response(f"OAuth failed: {e}", status_code=400)
+    creds = flow.credentials
+    refresh = creds.refresh_token
+    if refresh:
+        await db.user_settings.update_one(
+            {"user_id": user_id},
+            {"$set": {"yt_oauth_refresh_token_encrypted": encrypt_key(refresh), "yt_oauth_connected_at": now_iso()}},
+            upsert=True,
+        )
+    await db.oauth_states.delete_one({"state": state})
+    html = "<html><body style='font-family:sans-serif;padding:40px;text-align:center'><h2 style='color:#00594C'>YouTube connected ✓</h2><p>You can close this tab and return to Wealth Studio.</p><script>setTimeout(()=>window.close(),1500)</script></body></html>"
+    return Response(content=html, media_type="text/html")
+
+@api.get("/youtube/oauth/status")
+async def yt_oauth_status(user: dict = Depends(get_current_user)):
+    doc = await db.user_settings.find_one({"user_id": user["id"]})
+    return {"connected": bool((doc or {}).get("yt_oauth_refresh_token_encrypted")), "connected_at": (doc or {}).get("yt_oauth_connected_at")}
+
+@api.delete("/youtube/oauth")
+async def yt_oauth_disconnect(user: dict = Depends(get_current_user)):
+    await db.user_settings.update_one({"user_id": user["id"]}, {"$unset": {"yt_oauth_refresh_token_encrypted": "", "yt_oauth_connected_at": ""}})
+    return {"status": "disconnected"}
+
+async def _get_yt_credentials(user_id: str):
+    doc = await db.user_settings.find_one({"user_id": user_id})
+    enc = (doc or {}).get("yt_oauth_refresh_token_encrypted")
+    if not enc:
+        return None
+    refresh_token = decrypt_key(enc)
+    client_id = await get_user_key(user_id, "yt_oauth_client_id")
+    client_secret = await get_user_key(user_id, "yt_oauth_client_secret")
+    if not client_id or not client_secret:
+        return None
+    creds = Credentials(
+        token=None, refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id, client_secret=client_secret,
+        scopes=YT_OAUTH_SCOPES,
+    )
+    await asyncio.to_thread(creds.refresh, GoogleAuthRequest())
+    return creds
+
+@api.get("/videos/{vid}/yt-analytics")
+async def yt_analytics(vid: str, user: dict = Depends(get_current_user)):
+    video = await db.videos.find_one({"id": vid}, {"_id": 0})
+    if not video:
+        raise HTTPException(404, "Video not found")
+    yt_id = _extract_video_id(video.get("youtube_url") or "")
+    if not yt_id:
+        raise HTTPException(400, "Set the YouTube URL on this card first")
+    creds = await _get_yt_credentials(user["id"])
+    if not creds:
+        raise HTTPException(400, "Connect YouTube in Settings → YouTube Analytics first")
+
+    def fetch():
+        ya = gbuild("youtubeAnalytics", "v2", credentials=creds, cache_discovery=False)
+        end = datetime.now(timezone.utc).date().isoformat()
+        start = "2020-01-01"
+        retention = ya.reports().query(
+            ids="channel==MINE", startDate=start, endDate=end,
+            metrics="audienceWatchRatio,relativeRetentionPerformance",
+            dimensions="elapsedVideoTimeRatio", filters=f"video=={yt_id}",
+        ).execute()
+        sources = ya.reports().query(
+            ids="channel==MINE", startDate=start, endDate=end,
+            metrics="views,estimatedMinutesWatched,averageViewDuration",
+            dimensions="insightTrafficSourceType", filters=f"video=={yt_id}",
+            sort="-views",
+        ).execute()
+        summary = ya.reports().query(
+            ids="channel==MINE", startDate=start, endDate=end,
+            metrics="views,estimatedMinutesWatched,averageViewDuration,subscribersGained,likes,comments,shares",
+            filters=f"video=={yt_id}",
+        ).execute()
+        return retention, sources, summary
+
+    try:
+        retention, sources, summary = await asyncio.to_thread(fetch)
+    except Exception as e:
+        raise HTTPException(500, f"YouTube Analytics error: {e}")
+
+    def rows(report):
+        headers = [h["name"] for h in report.get("columnHeaders", [])]
+        return [dict(zip(headers, r)) for r in report.get("rows", [])]
+
+    return {
+        "retention_curve": rows(retention),  # [{elapsedVideoTimeRatio, audienceWatchRatio, relativeRetentionPerformance}]
+        "traffic_sources": rows(sources),    # [{insightTrafficSourceType, views, ...}]
+        "summary": (rows(summary)[0] if summary.get("rows") else {}),
+    }
 
 # ---------- Thumbnail A/B tracker ----------
 class ThumbStatsUpdate(BaseModel):
