@@ -2,6 +2,7 @@ import React from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { ThemeProvider } from "@/lib/theme";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import Vault from "@/pages/Vault";
@@ -29,6 +30,7 @@ export default function App() {
   return (
     <div className="App">
       <BrowserRouter>
+        <ThemeProvider>
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
@@ -42,6 +44,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AuthProvider>
+        </ThemeProvider>
       </BrowserRouter>
     </div>
   );

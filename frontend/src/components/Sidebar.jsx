@@ -2,9 +2,10 @@ import React from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
-  House, Lightbulb, Kanban, ChartLineUp, Handshake, CalendarBlank, GearSix, SignOut, Sparkle,
+  House, Lightbulb, Kanban, ChartLineUp, Handshake, CalendarBlank, GearSix, SignOut, Sparkle, Sun, Moon,
 } from "@phosphor-icons/react";
 import { useAuth } from "@/lib/auth";
+import { useTheme } from "@/lib/theme";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: House, testid: "nav-dashboard" },
@@ -18,6 +19,7 @@ const NAV = [
 
 export default function Sidebar() {
   const { user, logout } = useAuth();
+  const { theme, toggle } = useTheme();
   return (
     <aside className="w-[260px] shrink-0 border-r border-black/5 bg-white/40 backdrop-blur-xl h-screen sticky top-0 flex flex-col">
       <div className="px-6 py-7">
@@ -47,7 +49,31 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="p-4 border-t border-black/5">
+      <div className="p-4 border-t border-black/5 dark:border-white/5">
+        <button
+          data-testid="theme-toggle-btn"
+          onClick={toggle}
+          className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl mb-3 transition-all hover:bg-black/5 dark:hover:bg-white/5 border border-black/5 dark:border-white/5"
+          title="Toggle theme"
+        >
+          <div className="flex items-center gap-2.5">
+            {theme === "dark" ? (
+              <Moon size={16} weight="duotone" className="text-[#00E599]" />
+            ) : (
+              <Sun size={16} weight="duotone" className="text-[#FF6B4A]" />
+            )}
+            <span className="text-[12px] font-semibold tracking-wide" style={{ color: "var(--text-secondary)" }}>
+              {theme === "dark" ? "Dark Mode" : "Light Mode"}
+            </span>
+          </div>
+          <div className={`relative w-9 h-5 rounded-full transition-colors ${theme === "dark" ? "bg-[#00594C]" : "bg-black/10"}`}>
+            <motion.div
+              animate={{ x: theme === "dark" ? 16 : 0 }}
+              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+              className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-md"
+            />
+          </div>
+        </button>
         <div className="flex items-center gap-3 px-2 py-2">
           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#00594C] to-[#00E599] grid place-items-center text-white font-bold text-sm shadow-md">
             {(user?.name || "C").slice(0,1).toUpperCase()}

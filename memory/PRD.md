@@ -26,6 +26,7 @@ Solo creator building a faceless finance YouTube channel (India + global English
 - [2026-02] Resend email digest with on/off toggle + send-now
 - [2026-02] Thumbnail A/B tracker (AI vs Human variants, CTR auto-compute, winner highlight)
 - [2026-02] YouTube Analytics API (OAuth 2.0): retention curve + traffic sources + summary metrics per video
+- [2026-02] Dark mode toggle (persistent via localStorage; sidebar toggle with animated switch)
 - [2026-02] DEPLOYMENT: passed static analysis, ready to ship
 
 ## Prioritized Backlog
