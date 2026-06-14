@@ -1,0 +1,129 @@
+{
+  "theme_and_archetype": {
+    "domain": "Finance YouTube Channel Dashboard",
+    "theme": "Light",
+    "archetype": "Premium Swiss SaaS / Modern Fintech",
+    "description": "An ultra-premium, bright, and modern command center. Rejects standard dark mode tech clichés. Focuses on clarity, high-end typography, and subtle ambient motion. Uses a 'Crystal Glass' effect over a very soft, animated mesh background to create a rich, awed feeling without being dark. Emphasizes trust (green/bone) and high energy (coral/mint)."
+  },
+  "typography": {
+    "strategy": "The 'Creative Startup' Protocol - Bold, slightly wide headers paired with sterile, hyper-legible body text.",
+    "fonts": {
+      "heading": "Cabinet Grotesk",
+      "body": "Manrope",
+      "mono": "JetBrains Mono"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl tracking-tighter font-bold",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-semibold",
+      "h3": "text-xl font-medium tracking-tight",
+      "card_title": "text-lg font-semibold tracking-tight uppercase tracking-[0.05em]",
+      "body": "text-base leading-relaxed text-slate-600",
+      "labels": "text-xs font-semibold uppercase tracking-[0.1em] text-slate-500",
+      "numbers": "font-mono tracking-tight"
+    },
+    "banned_fonts": ["Inter", "Roboto", "Open Sans", "Syne"]
+  },
+  "color_palette": {
+    "background": {
+      "app": "#F8F9F7",
+      "mesh_gradient_blobs": ["#E0F2EC", "#FCEEEA", "#F0F4F8"],
+      "card": "rgba(255, 255, 255, 0.85)"
+    },
+    "text": {
+      "primary": "#0A0A0A",
+      "secondary": "#5C5C5C",
+      "tertiary": "#8A8A8A",
+      "accent": "#00594C"
+    },
+    "brand": {
+      "primary": "#00594C",
+      "primary_hover": "#004036",
+      "primary_light": "#E5F2F0",
+      "accent": "#FF6B4A",
+      "accent_hover": "#E55A3D",
+      "highlight": "#00E599"
+    },
+    "ui": {
+      "border": "rgba(0, 0, 0, 0.06)",
+      "border_glass": "rgba(255, 255, 255, 0.5)",
+      "divider": "#EAEAEA",
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444"
+    },
+    "banned_colors": ["#9D4CDD", "#1B93A4", "Purple", "Violet", "Standard Teal"]
+  },
+  "layout_and_spacing": {
+    "grid_system": "The 'Control Room' Grid - High density but generous padding within cards.",
+    "spacing_scale": "Tailwind standard, but amplified (p-6, p-8 inside cards).",
+    "surface_strategy": "Crystal Glassmorphism over light mesh. Cards have bg-white/85, backdrop-blur-xl, 1px white border, and soft 8px radius.",
+    "sections": {
+      "sidebar": "Fixed, 260px width, clean 1px right border, soft gray active states.",
+      "header": "Sticky top, backdrop-blur-xl, z-50, simple page title and profile.",
+      "kanban": "Horizontal scrolling, clear lane separators, no heavy card drop-shadows (flat cards).",
+      "dashboard_kpis": "Bento grid, 4 columns, mixing tall and wide widget spans."
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#00594C] text-white hover:bg-[#004036] rounded-md px-6 py-2 font-medium transition-all shadow-[0_2px_10px_rgba(0,89,76,0.2)]",
+      "secondary": "bg-white text-[#0A0A0A] border border-gray-200 hover:border-gray-300 rounded-md px-6 py-2 transition-all shadow-sm",
+      "ghost": "hover:bg-gray-100 text-[#5C5C5C] hover:text-[#0A0A0A] rounded-md px-4 py-2 transition-all"
+    },
+    "cards": {
+      "base": "bg-white/85 backdrop-blur-xl border border-white/60 shadow-[0_8px_32px_rgba(0,0,0,0.04)] rounded-xl p-6",
+      "kanban_card": "bg-white border border-gray-100 shadow-sm rounded-lg p-4 cursor-grab active:cursor-grabbing hover:shadow-md transition-all",
+      "idea_card": "bg-white border border-gray-100 shadow-sm rounded-lg p-5 hover:border-[#00594C]/30 transition-all group"
+    },
+    "inputs": {
+      "base": "bg-white border border-gray-200 rounded-md px-4 py-2 focus:ring-2 focus:ring-[#00594C]/20 focus:border-[#00594C] outline-none transition-all w-full text-sm",
+      "search": "pl-10 relative (icon absolute left-3 text-gray-400)"
+    },
+    "charts": {
+      "library": "Recharts via Shadcn",
+      "style": "No grid lines or very faint dashed lines (stroke-opacity-0.1). Curved monotone lines (tension=0.4). Area charts should use gradient fills from #00E599 to transparent. Custom tooltip with glassmorphism."
+    },
+    "claude_chat": {
+      "container": "Border-l border-gray-200 bg-[#FAFAFA] flex flex-col h-full",
+      "message_user": "bg-[#00594C] text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[85%] self-end",
+      "message_ai": "bg-white border border-gray-100 shadow-sm text-gray-800 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%] self-start font-body prose prose-sm"
+    }
+  },
+  "motion_and_interactions": {
+    "library": "Framer Motion",
+    "page_transitions": "Fade in and slight slide up (y: 10 -> 0, opacity: 0 -> 1, duration: 0.4s ease-out).",
+    "list_stagger": "For Idea Vault and Kanban: parent variants staggerChildren 0.05s, child variants y: 20 -> 0.",
+    "hover_effects": "Kanban cards slight lift (-translate-y-1) and shadow increase.",
+    "numbers": "Use framer-motion to animate KPI numbers counting up on load.",
+    "drag_drop": "Spring physics for kanban drag and drop (stiffness: 300, damping: 25)."
+  },
+  "accessibility_and_testing": {
+    "contrast": "Ensure #5C5C5C and #0A0A0A meet APCA contrast over #F8F9F7 background.",
+    "focus": "All interactive elements must have focus-visible:ring-2 focus-visible:ring-[#00594C]/50.",
+    "testing": "All interactive elements MUST include data-testid attribute (e.g., data-testid='kanban-drag-card', data-testid='claude-chat-input')."
+  },
+  "image_urls": {
+    "empty_state_dashboard": {
+      "url": "https://images.unsplash.com/photo-1618058313199-9037610ec161?auto=format&fit=crop&q=80",
+      "description": "Abstract white/blue light streaks for empty states or generic placeholders"
+    },
+    "profile_placeholder": {
+      "url": "https://images.unsplash.com/photo-1641499303047-5f1c5cd5b305?auto=format&fit=crop&q=80&w=200&h=200",
+      "description": "Professional camera setup placeholder for creator profile"
+    },
+    "monetization_bg": {
+      "url": "https://images.unsplash.com/photo-1558693865-7978af87b863?auto=format&fit=crop&q=80",
+      "description": "Money on table for affiliate/income tracker empty states or headers"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Ensure `data-testid` is added to all Shadcn components and custom interactive elements.",
+    "Install and configure `framer-motion` for page transitions, kanban interactions, and animated numbers.",
+    "Use Phosphor Icons (`@phosphor-icons/react`) for a premium, consistent icon set.",
+    "Setup routing (React Router) with paths: /, /vault, /pipeline, /analytics, /affiliates, /calendar, /settings.",
+    "For the Kanban board, you may use `@hello-pangea/dnd` or custom Framer Motion drag if preferred.",
+    "Implement the mesh gradient background using standard CSS radial gradients placed fixed behind the main content layout.",
+    "The Claude chat panel must support markdown rendering (use `react-markdown`).",
+    "Preload 50 realistic finance YouTube topics in the Idea Vault state."
+  ]
+}
