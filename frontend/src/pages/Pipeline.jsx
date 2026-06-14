@@ -288,6 +288,8 @@ function VideoDrawer({ video, onClose }) {
       ) : (
         <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
           <ExportButtons videoId={v.id} hasScript={!!v.script}/>
+          <YouTubeSync videoId={v.id} youtubeUrl={v.youtube_url}/>
+          <ThumbnailGen videoId={v.id} title={v.title} onDone={(url)=>setV({...v, thumbnail_url:url})}/>
           <UploadRow videoId={v.id} kind="thumbnail" label="Thumbnail (PNG/JPG/WEBP)" accept="image/png,image/jpeg,image/webp" currentUrl={v.thumbnail_url} onDone={(url)=>setV({...v, thumbnail_url:url})}/>
           <UploadRow videoId={v.id} kind="voiceover" label="Voiceover (MP3/WAV)" accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav" currentUrl={v.voiceover_url} onDone={(url)=>setV({...v, voiceover_url:url})}/>
           <Field label="Hook" value={v.hook} onSave={(val)=>saveField({hook:val})} testid="field-hook"/>
@@ -415,6 +417,68 @@ function ExportButtons({ videoId, hasScript }) {
       <button data-testid="export-txt" onClick={()=>download("txt")} className="text-xs font-bold text-[#00594C] hover:text-[#004036] uppercase tracking-[0.1em]">.txt</button>
       <span className="text-[#00594C]/30">|</span>
       <button data-testid="export-docx" onClick={()=>download("docx")} className="text-xs font-bold text-[#00594C] hover:text-[#004036] uppercase tracking-[0.1em]">.docx</button>
+    </div>
+  );
+}
+
+
+function YouTubeSync({ videoId, youtubeUrl }) {
+  const [busy, setBusy] = React.useState(false);
+  const sync = async () => {
+    if (!youtubeUrl) return toast.error("Add a YouTube URL on this card first");
+    setBusy(true);
+    try {
+      const r = await api.post(`/videos/${videoId}/youtube/sync`);
+      toast.success(`Synced ✓ ${r.data.views.toLocaleString()} views, ${r.data.likes} likes`);
+    } catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="flex items-center gap-2 p-3 rounded-xl bg-[#FFF3F0] border border-[#FF6B4A]/20">
+      <span className="text-xs font-bold text-[#FF6B4A] flex-1">📺 Live on YouTube? Auto-fetch stats:</span>
+      <button data-testid="yt-sync" onClick={sync} disabled={busy}
+        className="btn-accent !py-2 !px-4 text-xs disabled:opacity-50">
+        {busy ? "Syncing…" : "Sync from YouTube"}
+      </button>
+    </div>
+  );
+}
+
+function ThumbnailGen({ videoId, title, onDone }) {
+  const [open, setOpen] = React.useState(false);
+  const [prompt, setPrompt] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const generate = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post(`/videos/${videoId}/thumbnail/generate`, {
+        prompt: prompt || `Punchy thumbnail for: ${title}`
+      });
+      onDone(r.data.url);
+      toast.success("AI thumbnail generated ✓");
+      setOpen(false); setPrompt("");
+    } catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="p-3 rounded-xl bg-gradient-to-br from-[#FFF9E5] to-[#FFE9D6] border border-[#F59E0B]/25">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-bold text-[#92400E] flex-1">✨ Optional: Generate thumbnail with Gemini Nano Banana</span>
+        <button data-testid="ai-thumb-toggle" onClick={()=>setOpen(!open)} className="text-xs font-bold text-[#92400E] uppercase tracking-[0.1em]">
+          {open ? "Cancel" : "Try it"}
+        </button>
+      </div>
+      {open && (
+        <div className="mt-3 space-y-2">
+          <textarea data-testid="ai-thumb-prompt" rows={2} value={prompt} onChange={(e)=>setPrompt(e.target.value)}
+            placeholder="Extra details (e.g., 'rupee coins falling, shocked face, red & yellow')"
+            className="input-base text-sm"/>
+          <button data-testid="ai-thumb-generate" onClick={generate} disabled={busy}
+            className="btn-primary w-full disabled:opacity-50">
+            {busy ? "Generating… (15-30s)" : "Generate Thumbnail"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

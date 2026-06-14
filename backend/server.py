@@ -14,7 +14,11 @@ import bcrypt
 import jwt
 from cryptography.fernet import Fernet
 import io
+import asyncio
+import base64
+import resend
 import requests
+from googleapiclient.discovery import build as gbuild
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Query, Header, Response
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -293,6 +297,264 @@ async def get_key_info(user: dict = Depends(get_current_user)):
 async def delete_key(user: dict = Depends(get_current_user)):
     await db.user_settings.update_one({"user_id": user["id"]}, {"$unset": {"anthropic_key_encrypted": ""}})
     return {"status": "removed"}
+
+# ---------- Generic 3rd-party key storage (youtube, resend) ----------
+ALLOWED_KEY_TYPES = {"youtube", "resend"}
+
+class GenericKeyRequest(BaseModel):
+    api_key: str
+
+@api.post("/settings/keys/{key_type}")
+async def save_generic_key(key_type: str, body: GenericKeyRequest, user: dict = Depends(get_current_user)):
+    if key_type not in ALLOWED_KEY_TYPES:
+        raise HTTPException(400, "Unknown key type")
+    val = body.api_key.strip()
+    if len(val) < 10:
+        raise HTTPException(400, "Key looks too short")
+    encrypted = encrypt_key(val)
+    await db.user_settings.update_one(
+        {"user_id": user["id"]},
+        {"$set": {f"{key_type}_key_encrypted": encrypted, "updated_at": now_iso()}},
+        upsert=True,
+    )
+    return {"status": "ok", "preview": f"{val[:6]}...{val[-4:]}"}
+
+@api.get("/settings/keys/{key_type}")
+async def get_generic_key_info(key_type: str, user: dict = Depends(get_current_user)):
+    if key_type not in ALLOWED_KEY_TYPES:
+        raise HTTPException(400, "Unknown key type")
+    doc = await db.user_settings.find_one({"user_id": user["id"]})
+    field = f"{key_type}_key_encrypted"
+    if not doc or field not in doc:
+        return {"configured": False}
+    try:
+        plain = decrypt_key(doc[field])
+        return {"configured": True, "preview": f"{plain[:6]}...{plain[-4:]}"}
+    except Exception:
+        return {"configured": False}
+
+@api.delete("/settings/keys/{key_type}")
+async def delete_generic_key(key_type: str, user: dict = Depends(get_current_user)):
+    if key_type not in ALLOWED_KEY_TYPES:
+        raise HTTPException(400, "Unknown key type")
+    await db.user_settings.update_one({"user_id": user["id"]}, {"$unset": {f"{key_type}_key_encrypted": ""}})
+    return {"status": "removed"}
+
+async def get_user_key(user_id: str, key_type: str) -> Optional[str]:
+    doc = await db.user_settings.find_one({"user_id": user_id})
+    field = f"{key_type}_key_encrypted"
+    if not doc or field not in doc:
+        return None
+    try:
+        return decrypt_key(doc[field])
+    except Exception:
+        return None
+
+# ---------- Digest config ----------
+class DigestConfig(BaseModel):
+    enabled: bool = False
+    email: Optional[str] = ""
+    last_sent_at: Optional[str] = None
+
+@api.get("/settings/digest")
+async def get_digest(user: dict = Depends(get_current_user)):
+    doc = await db.user_settings.find_one({"user_id": user["id"]})
+    d = (doc or {}).get("digest", {})
+    return {"enabled": d.get("enabled", False), "email": d.get("email", ""), "last_sent_at": d.get("last_sent_at")}
+
+@api.post("/settings/digest")
+async def set_digest(body: DigestConfig, user: dict = Depends(get_current_user)):
+    if body.enabled and not body.email:
+        raise HTTPException(400, "Email required when digest is enabled")
+    await db.user_settings.update_one(
+        {"user_id": user["id"]},
+        {"$set": {"digest": {"enabled": body.enabled, "email": body.email, "last_sent_at": body.last_sent_at}}},
+        upsert=True,
+    )
+    return {"status": "ok"}
+
+def _build_digest_html(summary: dict, top_videos: list, affiliates_by_partner: dict) -> str:
+    rows = ""
+    for v in top_videos[:5]:
+        rows += f"<tr><td style='padding:8px;border-bottom:1px solid #eee;'>{v.get('video_title','')}</td><td style='padding:8px;border-bottom:1px solid #eee;text-align:right;'>{v.get('views',0):,}</td><td style='padding:8px;border-bottom:1px solid #eee;text-align:right;'>₹{v.get('adsense_earnings',0)}</td></tr>"
+    aff_rows = ""
+    for partner, amt in affiliates_by_partner.items():
+        aff_rows += f"<tr><td style='padding:6px'>{partner}</td><td style='padding:6px;text-align:right'>₹{amt:,.0f}</td></tr>"
+    return f"""
+    <table width='100%' style='font-family:Helvetica,Arial,sans-serif;color:#0A0A0A;max-width:600px;margin:0 auto;'>
+      <tr><td style='padding:24px 0;'>
+        <h1 style='color:#00594C;margin:0;font-size:28px;'>Your Weekly Wealth Studio Digest</h1>
+        <p style='color:#5C5C5C'>Numbers that matter, in one glance.</p>
+      </td></tr>
+      <tr><td>
+        <table width='100%' cellspacing='0'>
+          <tr>
+            <td style='background:#E5F2F0;padding:18px;border-radius:10px;'>
+              <div style='font-size:11px;color:#5C5C5C;text-transform:uppercase;letter-spacing:.1em'>Total Earnings</div>
+              <div style='font-size:28px;font-weight:bold;color:#00594C'>₹{summary.get('total_earnings',0):,.0f}</div>
+            </td>
+            <td width='12'></td>
+            <td style='background:#FCEEEA;padding:18px;border-radius:10px;'>
+              <div style='font-size:11px;color:#5C5C5C;text-transform:uppercase;letter-spacing:.1em'>Total Views</div>
+              <div style='font-size:28px;font-weight:bold;color:#FF6B4A'>{summary.get('total_views',0):,}</div>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+      <tr><td style='padding-top:24px'>
+        <h3 style='color:#0A0A0A'>Top videos</h3>
+        <table width='100%' style='border-collapse:collapse;font-size:13px;'>{rows or "<tr><td>No analytics logged yet.</td></tr>"}</table>
+      </td></tr>
+      <tr><td style='padding-top:24px'>
+        <h3 style='color:#0A0A0A'>Affiliate income</h3>
+        <table width='100%' style='border-collapse:collapse;font-size:13px;'>{aff_rows or "<tr><td>No affiliate entries.</td></tr>"}</table>
+      </td></tr>
+      <tr><td style='padding:30px 0;color:#8A8A8A;font-size:11px;text-align:center'>
+        Wealth Studio · Command Center · This is your weekly digest.
+      </td></tr>
+    </table>
+    """
+
+@api.post("/settings/digest/send-now")
+async def send_digest_now(user: dict = Depends(get_current_user)):
+    doc = await db.user_settings.find_one({"user_id": user["id"]})
+    d = (doc or {}).get("digest", {})
+    if not d.get("email"):
+        raise HTTPException(400, "Set a digest email first")
+    resend_key = await get_user_key(user["id"], "resend")
+    if not resend_key:
+        raise HTTPException(400, "Add your Resend API key in Settings first")
+
+    # Build summary inline (reuse logic)
+    videos = await db.videos.find({}, {"_id": 0}).to_list(1000)
+    analytics = await db.analytics.find({}, {"_id": 0}).to_list(2000)
+    affs = await db.affiliates.find({}, {"_id": 0}).to_list(2000)
+    total_views = sum(a.get("views", 0) for a in analytics)
+    total_adsense = sum(a.get("adsense_earnings", 0) for a in analytics)
+    total_affiliate = sum(a.get("earnings", 0) for a in affs)
+    by_partner = {}
+    for a in affs:
+        by_partner[a["partner"]] = by_partner.get(a["partner"], 0) + a.get("earnings", 0)
+    summary = {"total_earnings": total_adsense + total_affiliate, "total_views": total_views}
+    top_videos = sorted(analytics, key=lambda x: x.get("views", 0), reverse=True)
+
+    html = _build_digest_html(summary, top_videos, by_partner)
+    resend.api_key = resend_key
+    try:
+        email = await asyncio.to_thread(resend.Emails.send, {
+            "from": "Wealth Studio <onboarding@resend.dev>",
+            "to": [d["email"]],
+            "subject": "📈 Your Weekly Wealth Studio Digest",
+            "html": html,
+        })
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send: {str(e)}")
+    await db.user_settings.update_one(
+        {"user_id": user["id"]},
+        {"$set": {"digest.last_sent_at": now_iso()}},
+    )
+    return {"status": "sent", "id": email.get("id") if isinstance(email, dict) else None}
+
+# ---------- YouTube auto-fetch ----------
+def _extract_video_id(url: str) -> Optional[str]:
+    if not url:
+        return None
+    import re
+    patterns = [r"youtu\.be/([A-Za-z0-9_-]{11})", r"v=([A-Za-z0-9_-]{11})", r"shorts/([A-Za-z0-9_-]{11})"]
+    for p in patterns:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
+    return None
+
+@api.post("/videos/{vid}/youtube/sync")
+async def sync_youtube(vid: str, user: dict = Depends(get_current_user)):
+    video = await db.videos.find_one({"id": vid}, {"_id": 0})
+    if not video:
+        raise HTTPException(404, "Video not found")
+    yt_url = video.get("youtube_url")
+    yt_id = _extract_video_id(yt_url or "")
+    if not yt_id:
+        raise HTTPException(400, "Set a valid YouTube URL on this video card first")
+    yt_key = await get_user_key(user["id"], "youtube")
+    if not yt_key:
+        raise HTTPException(400, "Add your YouTube Data API key in Settings first")
+    try:
+        yt = gbuild("youtube", "v3", developerKey=yt_key, cache_discovery=False)
+        resp = await asyncio.to_thread(
+            lambda: yt.videos().list(part="statistics,snippet,contentDetails", id=yt_id).execute()
+        )
+    except Exception as e:
+        raise HTTPException(500, f"YouTube API error: {e}")
+    items = resp.get("items", [])
+    if not items:
+        raise HTTPException(404, "Video not found on YouTube")
+    stats = items[0]["statistics"]
+    snippet = items[0]["snippet"]
+    views = int(stats.get("viewCount", 0))
+    likes = int(stats.get("likeCount", 0))
+    comments = int(stats.get("commentCount", 0))
+    # Create or upsert today's analytics entry
+    today = datetime.now(timezone.utc).date().isoformat()
+    entry = AnalyticsEntry(
+        video_id=vid, video_title=snippet.get("title", video["title"]),
+        date=today, views=views, subscribers_gained=0,
+    )
+    # Replace any same-day entry for this video
+    await db.analytics.delete_many({"video_id": vid, "date": today})
+    await db.analytics.insert_one(entry.model_dump())
+    return {"status": "ok", "views": views, "likes": likes, "comments": comments, "title": snippet.get("title")}
+
+# ---------- Gemini Nano Banana thumbnail generation ----------
+class ThumbnailGenRequest(BaseModel):
+    prompt: str
+
+@api.post("/videos/{vid}/thumbnail/generate")
+async def generate_thumbnail(vid: str, body: ThumbnailGenRequest, user: dict = Depends(get_current_user)):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "EMERGENT_LLM_KEY not configured on server")
+    video = await db.videos.find_one({"id": vid})
+    if not video:
+        raise HTTPException(404, "Video not found")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(500, f"emergentintegrations not installed: {e}")
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"thumb-{vid}-{uuid.uuid4()}",
+        system_message="You are an expert YouTube thumbnail designer for a finance education channel.",
+    )
+    chat.with_model("gemini", "gemini-3.1-flash-image-preview").with_params(modalities=["image", "text"])
+    full_prompt = (
+        f"Create a bold, eye-catching YouTube thumbnail (16:9, 1280x720) for a finance education video titled "
+        f"'{video['title']}'. {body.prompt}. Use high contrast colors, large bold text (3-5 words max), "
+        f"a striking finance visual (money, charts, shocked expression, or India-relevant imagery). "
+        f"Style: modern, professional, finance YouTube channel. No watermarks."
+    )
+    try:
+        text, images = await chat.send_message_multimodal_response(UserMessage(text=full_prompt))
+    except Exception as e:
+        raise HTTPException(500, f"Image gen failed: {e}")
+    if not images:
+        raise HTTPException(500, "No image returned by Gemini")
+    img = images[0]
+    image_bytes = base64.b64decode(img["data"])
+    ext = "png"
+    path = f"{APP_NAME}/uploads/{user['id']}/{vid}/thumbnail-gen-{uuid.uuid4()}.{ext}"
+    try:
+        result = put_object(path, image_bytes, "image/png")
+    except Exception as e:
+        raise HTTPException(500, f"Storage failed: {e}")
+    public_path = f"/api/files/{result['path']}"
+    await db.files.insert_one({
+        "id": str(uuid.uuid4()), "video_id": vid, "kind": "thumbnail",
+        "storage_path": result["path"], "original_filename": "ai-thumbnail.png",
+        "content_type": "image/png", "size": len(image_bytes),
+        "is_deleted": False, "created_at": now_iso(),
+    })
+    await db.videos.update_one({"id": vid}, {"$set": {"thumbnail_url": public_path, "updated_at": now_iso()}})
+    return {"url": public_path}
 
 # ---------- Ideas ----------
 @api.get("/ideas")

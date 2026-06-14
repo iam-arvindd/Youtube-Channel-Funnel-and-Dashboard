@@ -2,101 +2,125 @@ import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api, formatErr } from "@/lib/api";
 import Shell from "@/components/Shell";
-import { Key, CheckCircle, Trash, ShieldCheck, Sparkle } from "@phosphor-icons/react";
+import { Key, CheckCircle, Trash, ShieldCheck, Sparkle, YoutubeLogo, EnvelopeSimple, PaperPlaneTilt } from "@phosphor-icons/react";
 import { toast, Toaster } from "sonner";
 
-export default function Settings() {
+function KeyCard({ title, subtitle, keyType, placeholder, helpUrl, icon: Icon, accent }) {
   const [info, setInfo] = useState(null);
-  const [key, setKey] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const load = () => api.get("/settings/anthropic-key").then(r=>setInfo(r.data));
-  useEffect(() => { load(); }, []);
-
+  const [val, setVal] = useState("");
+  const [busy, setBusy] = useState(false);
+  const path = keyType === "anthropic" ? "/settings/anthropic-key" : `/settings/keys/${keyType}`;
+  const load = () => api.get(path).then(r=>setInfo(r.data));
+  useEffect(()=>{ load(); /* eslint-disable-next-line */ }, []);
   const save = async () => {
-    if (!key.startsWith("sk-")) return toast.error("Key must start with sk-");
-    setSaving(true);
-    try {
-      await api.post("/settings/anthropic-key", { api_key: key.trim() });
-      toast.success("Claude API key linked ✓");
-      setKey(""); load();
-    } catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
-    finally { setSaving(false); }
+    if (val.length < 8) return toast.error("Key too short");
+    setBusy(true);
+    try { await api.post(path, { api_key: val.trim() }); toast.success(`${title} connected ✓`); setVal(""); load(); }
+    catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
+    finally { setBusy(false); }
   };
-
   const remove = async () => {
-    if (!window.confirm("Remove your Claude API key?")) return;
-    await api.delete("/settings/anthropic-key");
-    toast.success("Key removed"); load();
+    if (!window.confirm(`Remove ${title} key?`)) return;
+    await api.delete(path); load(); toast.success("Removed");
   };
-
   return (
-    <Shell title="Settings" subtitle="Connect Claude. Configure your studio.">
+    <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} className="glass rounded-2xl p-7">
+      <div className="flex items-center gap-3">
+        <div className="w-11 h-11 rounded-xl grid place-items-center shadow-md" style={{background: accent}}>
+          <Icon weight="fill" size={20} color="white"/>
+        </div>
+        <div className="flex-1">
+          <h3 className="font-display text-lg font-bold tracking-tight">{title}</h3>
+          <p className="text-xs text-[#5C5C5C]">{subtitle}</p>
+        </div>
+        {info?.configured && (
+          <span className="pill" style={{background: "#10B98122", color:"#10B981"}}>
+            <CheckCircle size={11} weight="fill"/> Linked
+          </span>
+        )}
+      </div>
+      {info?.configured ? (
+        <div className="mt-4 flex items-center gap-2">
+          <code className="font-mono text-xs flex-1 px-3 py-2 bg-black/[0.03] rounded-lg">{info.preview}</code>
+          <button data-testid={`remove-${keyType}`} onClick={remove} className="btn-ghost !p-2 text-[#EF4444]"><Trash size={14}/></button>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-[#8A8A8A]">Not connected. Get yours at <a href={helpUrl} target="_blank" rel="noreferrer" className="text-[#00594C] underline font-semibold">{new URL(helpUrl).hostname}</a></p>
+      )}
+      <div className="mt-3 flex gap-2">
+        <input data-testid={`input-${keyType}`} type="password" placeholder={placeholder} value={val} onChange={(e)=>setVal(e.target.value)} className="input-base font-mono text-xs"/>
+        <button data-testid={`save-${keyType}`} onClick={save} disabled={busy || !val} className="btn-primary !px-4 disabled:opacity-50">
+          {busy ? "…" : info?.configured ? "Update" : "Link"}
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+function DigestCard() {
+  const [d, setD] = useState({ enabled: false, email: "" });
+  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
+  const load = () => api.get("/settings/digest").then(r=>setD(r.data));
+  useEffect(()=>{ load(); }, []);
+  const save = async () => {
+    setBusy(true);
+    try { await api.post("/settings/digest", d); toast.success("Digest settings saved"); load(); }
+    catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  const sendNow = async () => {
+    setSending(true);
+    try { await api.post("/settings/digest/send-now"); toast.success("Digest sent! Check your inbox."); load(); }
+    catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
+    finally { setSending(false); }
+  };
+  return (
+    <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} className="glass rounded-2xl p-7">
+      <div className="flex items-center gap-3">
+        <div className="w-11 h-11 rounded-xl bg-[#00594C] grid place-items-center shadow-md">
+          <EnvelopeSimple weight="fill" size={20} color="white"/>
+        </div>
+        <div className="flex-1">
+          <h3 className="font-display text-lg font-bold tracking-tight">Weekly Email Digest</h3>
+          <p className="text-xs text-[#5C5C5C]">RPM, views & affiliate income summary every week. Requires Resend key above.</p>
+        </div>
+        <label className="relative inline-flex items-center cursor-pointer">
+          <input data-testid="digest-toggle" type="checkbox" checked={d.enabled} onChange={(e)=>setD({...d, enabled:e.target.checked})} className="sr-only peer"/>
+          <div className="w-11 h-6 bg-black/10 rounded-full peer peer-checked:bg-[#00594C] transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform peer-checked:after:translate-x-5"/>
+        </label>
+      </div>
+      <div className="mt-4 grid grid-cols-[1fr_auto_auto] gap-2 items-center">
+        <input data-testid="digest-email" type="email" placeholder="you@example.com" value={d.email || ""} onChange={(e)=>setD({...d, email:e.target.value})} className="input-base"/>
+        <button data-testid="digest-save" onClick={save} disabled={busy} className="btn-primary !px-4 disabled:opacity-50">{busy ? "…" : "Save"}</button>
+        <button data-testid="digest-send" onClick={sendNow} disabled={sending || !d.email} className="btn-accent !px-4 !py-[10px] disabled:opacity-50 flex items-center gap-1.5">
+          <PaperPlaneTilt size={14}/> {sending ? "Sending…" : "Send now"}
+        </button>
+      </div>
+      {d.last_sent_at && <p className="text-[10px] text-[#8A8A8A] mt-2 font-mono">Last sent: {new Date(d.last_sent_at).toLocaleString()}</p>}
+    </motion.div>
+  );
+}
+
+export default function Settings() {
+  return (
+    <Shell title="Settings" subtitle="Connect integrations. Configure your studio.">
       <Toaster richColors position="top-right"/>
+      <div className="max-w-2xl space-y-5">
+        <KeyCard title="Anthropic Claude" subtitle="Powers script writing chat (Claude Sonnet 4.6)." keyType="anthropic"
+          placeholder="sk-ant-api03-..." helpUrl="https://console.anthropic.com/" icon={Sparkle} accent="#00594C"/>
 
-      <div className="max-w-2xl">
-        <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} className="glass rounded-2xl p-8">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-[#00594C] grid place-items-center shadow-[0_8px_22px_rgba(0,89,76,0.25)]">
-              <Sparkle weight="fill" size={22} color="#00E599"/>
-            </div>
-            <div>
-              <h3 className="font-display text-xl font-bold tracking-tight">Anthropic API Key</h3>
-              <p className="text-sm text-[#5C5C5C]">Powers the Claude Sonnet 4.6 chat for script writing.</p>
-            </div>
-          </div>
+        <KeyCard title="YouTube Data API" subtitle="Auto-fetch views & stats once a video is live." keyType="youtube"
+          placeholder="AIzaSy..." helpUrl="https://console.cloud.google.com/apis/library/youtube.googleapis.com" icon={YoutubeLogo} accent="#FF0000"/>
 
-          {info?.configured ? (
-            <div className="mt-6 bg-[#E5F2F0] border border-[#00594C]/20 rounded-xl p-5">
-              <div className="flex items-center gap-3">
-                <CheckCircle size={22} weight="fill" className="text-[#00594C]"/>
-                <div className="flex-1">
-                  <div className="font-semibold text-[#00594C]">Connected</div>
-                  <div className="text-xs font-mono text-[#5C5C5C] mt-1">{info.preview}</div>
-                </div>
-                <button data-testid="remove-key" onClick={remove} className="btn-ghost !p-2 text-[#EF4444]">
-                  <Trash size={16}/>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-6 bg-[#FCEEEA] border border-[#FF6B4A]/30 rounded-xl p-4 text-sm text-[#5C5C5C]">
-              No key connected. Add yours below to start writing scripts with Claude.
-            </div>
-          )}
+        <KeyCard title="Resend (Email)" subtitle="Used to send weekly digest emails." keyType="resend"
+          placeholder="re_..." helpUrl="https://resend.com/api-keys" icon={EnvelopeSimple} accent="#FF6B4A"/>
 
-          <div className="mt-6">
-            <label className="text-[11px] uppercase tracking-[0.1em] font-semibold text-[#5C5C5C] flex items-center gap-2">
-              <Key size={12}/> Paste your Anthropic API Key
-            </label>
-            <input
-              data-testid="api-key-input"
-              type="password"
-              placeholder="sk-ant-api03-..."
-              value={key}
-              onChange={(e)=>setKey(e.target.value)}
-              className="input-base mt-2 font-mono"
-            />
-            <p className="text-xs text-[#8A8A8A] mt-2 flex items-start gap-1.5">
-              <ShieldCheck size={12} className="mt-0.5 text-[#00594C]"/>
-              Stored encrypted (Fernet) on the server. Never exposed to the browser after save.
-              Get a key at <a href="https://console.anthropic.com/" target="_blank" rel="noreferrer" className="text-[#00594C] underline font-semibold">console.anthropic.com</a>.
-            </p>
-            <button data-testid="save-key" onClick={save} disabled={saving || !key} className="btn-primary mt-4 disabled:opacity-50">
-              {saving ? "Linking…" : info?.configured ? "Update Key" : "Link Claude"}
-            </button>
-          </div>
-        </motion.div>
+        <DigestCard/>
 
-        <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:0.1}} className="glass rounded-2xl p-8 mt-5">
-          <h3 className="font-display text-xl font-bold tracking-tight">Workflow Reminders</h3>
-          <ul className="mt-4 space-y-2 text-sm text-[#5C5C5C]">
-            <li className="flex gap-2"><span className="text-[#00594C] font-bold">1.</span> Script in Claude chat (this dashboard) → save as script field.</li>
-            <li className="flex gap-2"><span className="text-[#00594C] font-bold">2.</span> Generate voiceover at <a href="https://elevenlabs.io" target="_blank" rel="noreferrer" className="text-[#00594C] underline">ElevenLabs</a> → paste MP3 URL in card.</li>
-            <li className="flex gap-2"><span className="text-[#00594C] font-bold">3.</span> Build video at <a href="https://invideo.io" target="_blank" rel="noreferrer" className="text-[#00594C] underline">InVideo AI</a> → paste link.</li>
-            <li className="flex gap-2"><span className="text-[#00594C] font-bold">4.</span> Thumbnail in <a href="https://canva.com" target="_blank" rel="noreferrer" className="text-[#00594C] underline">Canva</a> → upload PNG URL.</li>
-            <li className="flex gap-2"><span className="text-[#00594C] font-bold">5.</span> Schedule & publish on YouTube → log analytics weekly.</li>
-          </ul>
+        <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} className="glass rounded-2xl p-7">
+          <h3 className="font-display text-lg font-bold tracking-tight flex items-center gap-2"><ShieldCheck size={18} className="text-[#00594C]"/> Security</h3>
+          <p className="text-sm text-[#5C5C5C] mt-2">All API keys are encrypted with Fernet on the server and never returned to the browser in full — only the masked preview above.</p>
         </motion.div>
       </div>
     </Shell>
