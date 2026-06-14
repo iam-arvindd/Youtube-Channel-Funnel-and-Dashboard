@@ -479,31 +479,48 @@ async def sync_youtube(vid: str, user: dict = Depends(get_current_user)):
     yt_key = await get_user_key(user["id"], "youtube")
     if not yt_key:
         raise HTTPException(400, "Add your YouTube Data API key in Settings first")
-    try:
-        yt = gbuild("youtube", "v3", developerKey=yt_key, cache_discovery=False)
-        resp = await asyncio.to_thread(
-            lambda: yt.videos().list(part="statistics,snippet,contentDetails", id=yt_id).execute()
-        )
-    except Exception as e:
-        raise HTTPException(500, f"YouTube API error: {e}")
+    result = await _yt_sync_one(yt_key, vid, video, yt_id)
+    return {"status": "ok", **result}
+
+async def _yt_sync_one(yt_key: str, vid: str, video: dict, yt_id: str) -> dict:
+    yt = gbuild("youtube", "v3", developerKey=yt_key, cache_discovery=False)
+    resp = await asyncio.to_thread(
+        lambda: yt.videos().list(part="statistics,snippet,contentDetails", id=yt_id).execute()
+    )
     items = resp.get("items", [])
     if not items:
-        raise HTTPException(404, "Video not found on YouTube")
+        return {"video_id": vid, "skipped": "not-on-youtube"}
     stats = items[0]["statistics"]
     snippet = items[0]["snippet"]
     views = int(stats.get("viewCount", 0))
     likes = int(stats.get("likeCount", 0))
     comments = int(stats.get("commentCount", 0))
-    # Create or upsert today's analytics entry
     today = datetime.now(timezone.utc).date().isoformat()
     entry = AnalyticsEntry(
         video_id=vid, video_title=snippet.get("title", video["title"]),
         date=today, views=views, subscribers_gained=0,
     )
-    # Replace any same-day entry for this video
     await db.analytics.delete_many({"video_id": vid, "date": today})
     await db.analytics.insert_one(entry.model_dump())
-    return {"status": "ok", "views": views, "likes": likes, "comments": comments, "title": snippet.get("title")}
+    return {"video_id": vid, "views": views, "likes": likes, "comments": comments, "title": snippet.get("title")}
+
+@api.post("/youtube/sync-all")
+async def sync_all(user: dict = Depends(get_current_user)):
+    yt_key = await get_user_key(user["id"], "youtube")
+    if not yt_key:
+        raise HTTPException(400, "Add your YouTube Data API key in Settings first")
+    videos = await db.videos.find({"youtube_url": {"$nin": [None, ""]}}, {"_id": 0}).to_list(500)
+    results = []
+    for v in videos:
+        yt_id = _extract_video_id(v.get("youtube_url") or "")
+        if not yt_id:
+            results.append({"video_id": v["id"], "skipped": "bad-url"}); continue
+        try:
+            r = await _yt_sync_one(yt_key, v["id"], v, yt_id)
+            results.append(r)
+        except Exception as e:
+            results.append({"video_id": v["id"], "error": str(e)[:120]})
+    return {"synced": len([r for r in results if "views" in r]), "total": len(videos), "results": results}
 
 # ---------- Gemini Nano Banana thumbnail generation ----------
 class ThumbnailGenRequest(BaseModel):
@@ -549,6 +566,7 @@ async def generate_thumbnail(vid: str, body: ThumbnailGenRequest, user: dict = D
     public_path = f"/api/files/{result['path']}"
     await db.files.insert_one({
         "id": str(uuid.uuid4()), "video_id": vid, "kind": "thumbnail",
+        "variant": "ai", "ctr": 0.0, "impressions": 0, "clicks": 0,
         "storage_path": result["path"], "original_filename": "ai-thumbnail.png",
         "content_type": "image/png", "size": len(image_bytes),
         "is_deleted": False, "created_at": now_iso(),
@@ -797,11 +815,13 @@ EXT_MAP = {
 }
 
 @api.post("/videos/{vid}/upload")
-async def upload_for_video(vid: str, kind: str = Query(...), file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+async def upload_for_video(vid: str, kind: str = Query(...), variant: str = Query("human"), file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     if kind not in ALLOWED_KIND:
         raise HTTPException(400, "kind must be thumbnail or voiceover")
     if file.content_type not in ALLOWED_KIND[kind]:
         raise HTTPException(400, f"Unsupported content-type {file.content_type}")
+    if variant not in ("human", "ai"):
+        variant = "human"
     video = await db.videos.find_one({"id": vid})
     if not video:
         raise HTTPException(404, "Video not found")
@@ -814,10 +834,15 @@ async def upload_for_video(vid: str, kind: str = Query(...), file: UploadFile = 
         result = put_object(path, data, file.content_type)
     except Exception as e:
         raise HTTPException(500, f"Upload failed: {e}")
+    file_id = str(uuid.uuid4())
     await db.files.insert_one({
-        "id": str(uuid.uuid4()),
+        "id": file_id,
         "video_id": vid,
         "kind": kind,
+        "variant": variant if kind == "thumbnail" else None,
+        "ctr": 0.0,
+        "impressions": 0,
+        "clicks": 0,
         "storage_path": result["path"],
         "original_filename": file.filename,
         "content_type": file.content_type,
@@ -825,11 +850,10 @@ async def upload_for_video(vid: str, kind: str = Query(...), file: UploadFile = 
         "is_deleted": False,
         "created_at": now_iso(),
     })
-    # save URL ref on the video
     field = "thumbnail_url" if kind == "thumbnail" else "voiceover_url"
     public_path = f"/api/files/{result['path']}"
     await db.videos.update_one({"id": vid}, {"$set": {field: public_path, "updated_at": now_iso()}})
-    return {"path": result["path"], "url": public_path}
+    return {"id": file_id, "path": result["path"], "url": public_path, "variant": variant}
 
 @api.get("/files/{path:path}")
 async def serve_file(path: str, auth: str = Query(None), authorization: str = Header(None)):
@@ -849,6 +873,40 @@ async def serve_file(path: str, auth: str = Query(None), authorization: str = He
         raise HTTPException(404, "File not found")
     data, ct = get_object(path)
     return Response(content=data, media_type=rec.get("content_type", ct))
+
+# ---------- Thumbnail A/B tracker ----------
+class ThumbStatsUpdate(BaseModel):
+    impressions: Optional[int] = None
+    clicks: Optional[int] = None
+    ctr: Optional[float] = None
+
+@api.get("/videos/{vid}/thumbnails")
+async def list_thumbnails(vid: str, user: dict = Depends(get_current_user)):
+    docs = await db.files.find(
+        {"video_id": vid, "kind": "thumbnail", "is_deleted": False},
+        {"_id": 0},
+    ).sort("created_at", 1).to_list(50)
+    for d in docs:
+        d["url"] = f"/api/files/{d['storage_path']}"
+    return docs
+
+@api.patch("/thumbnails/{file_id}")
+async def update_thumb_stats(file_id: str, body: ThumbStatsUpdate, user: dict = Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "impressions" in updates and "clicks" in updates and updates["impressions"] > 0:
+        updates["ctr"] = round(updates["clicks"] / updates["impressions"] * 100, 2)
+    if updates:
+        await db.files.update_one({"id": file_id, "kind": "thumbnail"}, {"$set": updates})
+    doc = await db.files.find_one({"id": file_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Thumbnail not found")
+    doc["url"] = f"/api/files/{doc['storage_path']}"
+    return doc
+
+@api.delete("/thumbnails/{file_id}")
+async def delete_thumb(file_id: str, user: dict = Depends(get_current_user)):
+    await db.files.update_one({"id": file_id}, {"$set": {"is_deleted": True}})
+    return {"status": "deleted"}
 
 # ---------- Script export ----------
 @api.get("/videos/{vid}/export")

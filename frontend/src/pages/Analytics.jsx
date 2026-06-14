@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
+
 import { motion } from "framer-motion";
 import { api, formatErr } from "@/lib/api";
 import Shell from "@/components/Shell";
-import { Plus, Trash } from "@phosphor-icons/react";
+import { Plus, Trash, YoutubeLogo } from "@phosphor-icons/react";
 import { toast, Toaster } from "sonner";
 import { LineChart, Line, BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from "recharts";
 
@@ -29,7 +30,12 @@ export default function Analytics() {
 
   return (
     <Shell title="Analytics" subtitle="Manually log per-video stats. Visualize wins."
-      action={<button data-testid="add-analytics" onClick={()=>setShow(true)} className="btn-primary flex items-center gap-2"><Plus size={16} weight="bold"/> Log Entry</button>}>
+      action={
+        <div className="flex gap-2">
+          <BulkSyncButton onDone={load}/>
+          <button data-testid="add-analytics" onClick={()=>setShow(true)} className="btn-primary flex items-center gap-2"><Plus size={16} weight="bold"/> Log Entry</button>
+        </div>
+      }>
       <Toaster richColors position="top-right"/>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -115,6 +121,24 @@ const Mini = ({ label, value, accent }) => (
     <div className="kpi-number text-3xl mt-2" style={{color: accent}}>{value}</div>
   </motion.div>
 );
+
+function BulkSyncButton({ onDone }) {
+  const [busy, setBusy] = React.useState(false);
+  const sync = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post("/youtube/sync-all");
+      toast.success(`Synced ${r.data.synced}/${r.data.total} videos from YouTube`);
+      onDone();
+    } catch (e) { toast.error(formatErr(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <button data-testid="bulk-sync-yt" onClick={sync} disabled={busy} className="btn-accent flex items-center gap-2 disabled:opacity-60">
+      <YoutubeLogo size={16} weight="fill"/> {busy ? "Syncing all…" : "Sync all from YouTube"}
+    </button>
+  );
+}
 
 const ChartCard = ({ title, children }) => (
   <div className="glass rounded-2xl p-6">

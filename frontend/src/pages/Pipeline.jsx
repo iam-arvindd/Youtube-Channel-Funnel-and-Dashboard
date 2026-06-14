@@ -290,6 +290,7 @@ function VideoDrawer({ video, onClose }) {
           <ExportButtons videoId={v.id} hasScript={!!v.script}/>
           <YouTubeSync videoId={v.id} youtubeUrl={v.youtube_url}/>
           <ThumbnailGen videoId={v.id} title={v.title} onDone={(url)=>setV({...v, thumbnail_url:url})}/>
+          <ThumbnailAB videoId={v.id}/>
           <UploadRow videoId={v.id} kind="thumbnail" label="Thumbnail (PNG/JPG/WEBP)" accept="image/png,image/jpeg,image/webp" currentUrl={v.thumbnail_url} onDone={(url)=>setV({...v, thumbnail_url:url})}/>
           <UploadRow videoId={v.id} kind="voiceover" label="Voiceover (MP3/WAV)" accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav" currentUrl={v.voiceover_url} onDone={(url)=>setV({...v, voiceover_url:url})}/>
           <Field label="Hook" value={v.hook} onSave={(val)=>saveField({hook:val})} testid="field-hook"/>
@@ -353,7 +354,7 @@ function UploadRow({ videoId, kind, label, accept, currentUrl, onDone }) {
       const fd = new FormData();
       fd.append("file", file);
       const token = localStorage.getItem("fyt_token");
-      const res = await fetch(`${API}/videos/${videoId}/upload?kind=${kind}`, {
+      const res = await fetch(`${API}/videos/${videoId}/upload?kind=${kind}&variant=human`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
@@ -479,6 +480,73 @@ function ThumbnailGen({ videoId, title, onDone }) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+
+function ThumbnailAB({ videoId }) {
+  const [thumbs, setThumbs] = React.useState([]);
+  const load = () => api.get(`/videos/${videoId}/thumbnails`).then(r=>setThumbs(r.data));
+  React.useEffect(() => { load(); /* eslint-disable-next-line */ }, [videoId]);
+  if (thumbs.length < 1) return null;
+  const winner = thumbs.reduce((best, t) => (t.ctr || 0) > (best?.ctr || 0) ? t : best, null);
+  const token = localStorage.getItem("fyt_token");
+  return (
+    <div className="p-4 rounded-xl bg-white border border-black/5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.1em] font-bold text-[#5C5C5C]">Thumbnail A/B Tracker</div>
+          <div className="text-xs text-[#8A8A8A]">Compare AI vs Human · {thumbs.length} variant{thumbs.length>1?"s":""}</div>
+        </div>
+        {winner && (winner.ctr || 0) > 0 && (
+          <span className="pill" style={{background:"#10B98122", color:"#10B981"}}>🏆 {(winner.variant||"").toUpperCase()} · {winner.ctr}%</span>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {thumbs.map(t => (
+          <ThumbCard key={t.id} thumb={t} token={token} isWinner={winner?.id===t.id && (winner.ctr||0)>0} onUpdate={load}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ThumbCard({ thumb, token, isWinner, onUpdate }) {
+  const [impr, setImpr] = React.useState(thumb.impressions || 0);
+  const [clicks, setClicks] = React.useState(thumb.clicks || 0);
+  const save = async () => {
+    try {
+      await api.patch(`/thumbnails/${thumb.id}`, { impressions: Number(impr), clicks: Number(clicks) });
+      toast.success("Stats updated"); onUpdate();
+    } catch (e) { toast.error("Failed to save"); }
+  };
+  const del = async () => {
+    if (!window.confirm("Remove this thumbnail variant?")) return;
+    await api.delete(`/thumbnails/${thumb.id}`); onUpdate();
+  };
+  const url = `${process.env.REACT_APP_BACKEND_URL}${thumb.url}?auth=${token}`;
+  const variantColor = thumb.variant === "ai" ? "#F59E0B" : "#0EA5E9";
+  return (
+    <div className={`rounded-lg overflow-hidden border-2 ${isWinner ? "border-[#10B981]" : "border-black/5"} bg-white`}>
+      <div className="relative">
+        <img src={url} alt="variant" className="w-full aspect-video object-cover"/>
+        <span className="absolute top-2 left-2 pill !text-[10px] !py-1" style={{background: variantColor+"EE", color:"white"}}>
+          {thumb.variant === "ai" ? "✨ AI" : "👤 HUMAN"}
+        </span>
+        <button onClick={del} className="absolute top-2 right-2 p-1.5 bg-white/90 rounded-md text-[#EF4444] opacity-0 hover:opacity-100"><Trash size={12}/></button>
+      </div>
+      <div className="p-3 space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-[#5C5C5C]">CTR</span>
+          <span className="font-mono font-bold text-[#00594C]">{thumb.ctr || 0}%</span>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <input data-testid={`impr-${thumb.id}`} type="number" placeholder="Impr." value={impr} onChange={(e)=>setImpr(e.target.value)} className="input-base !py-1.5 !px-2 text-xs"/>
+          <input data-testid={`clicks-${thumb.id}`} type="number" placeholder="Clicks" value={clicks} onChange={(e)=>setClicks(e.target.value)} className="input-base !py-1.5 !px-2 text-xs"/>
+        </div>
+        <button data-testid={`save-stats-${thumb.id}`} onClick={save} className="w-full btn-primary !py-1.5 text-xs">Update stats</button>
+      </div>
     </div>
   );
 }
