@@ -13,7 +13,9 @@ from typing import List, Optional, Literal
 import bcrypt
 import jwt
 from cryptography.fernet import Fernet
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, status
+import io
+import requests
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Query, Header, Response
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -27,6 +29,10 @@ JWT_SECRET = os.environ['JWT_SECRET']
 ADMIN_EMAIL = os.environ['ADMIN_EMAIL'].lower()
 ADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']
 ENCRYPTION_KEY = os.environ['API_KEY_ENCRYPTION_KEY']
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+APP_NAME = "wealth-studio"
+storage_key_cache = None
 JWT_ALGORITHM = "HS256"
 fernet = Fernet(ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else ENCRYPTION_KEY)
 
@@ -68,6 +74,33 @@ def encrypt_key(plain: str) -> str:
 
 def decrypt_key(cipher: str) -> str:
     return fernet.decrypt(cipher.encode()).decode()
+
+def init_storage():
+    global storage_key_cache
+    if storage_key_cache:
+        return storage_key_cache
+    if not EMERGENT_LLM_KEY:
+        raise RuntimeError("EMERGENT_LLM_KEY not configured")
+    r = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+    r.raise_for_status()
+    storage_key_cache = r.json()["storage_key"]
+    return storage_key_cache
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    r = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data, timeout=120,
+    )
+    r.raise_for_status()
+    return r.json()
+
+def get_object(path: str):
+    key = init_storage()
+    r = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    r.raise_for_status()
+    return r.content, r.headers.get("Content-Type", "application/octet-stream")
 
 async def get_current_user(request: Request) -> dict:
     auth = request.headers.get("Authorization", "")
@@ -491,6 +524,109 @@ async def chat_stream(body: ChatRequest, user: dict = Depends(get_current_user))
 
     return StreamingResponse(event_gen(), media_type="text/plain")
 
+# ---------- Uploads (Emergent object storage) ----------
+ALLOWED_KIND = {
+    "thumbnail": {"image/png", "image/jpeg", "image/webp"},
+    "voiceover": {"audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/mp4"},
+}
+EXT_MAP = {
+    "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+    "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "wav", "audio/x-wav": "wav", "audio/mp4": "m4a",
+}
+
+@api.post("/videos/{vid}/upload")
+async def upload_for_video(vid: str, kind: str = Query(...), file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    if kind not in ALLOWED_KIND:
+        raise HTTPException(400, "kind must be thumbnail or voiceover")
+    if file.content_type not in ALLOWED_KIND[kind]:
+        raise HTTPException(400, f"Unsupported content-type {file.content_type}")
+    video = await db.videos.find_one({"id": vid})
+    if not video:
+        raise HTTPException(404, "Video not found")
+    data = await file.read()
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(400, "File too large (max 25 MB)")
+    ext = EXT_MAP.get(file.content_type, "bin")
+    path = f"{APP_NAME}/uploads/{user['id']}/{vid}/{kind}-{uuid.uuid4()}.{ext}"
+    try:
+        result = put_object(path, data, file.content_type)
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {e}")
+    await db.files.insert_one({
+        "id": str(uuid.uuid4()),
+        "video_id": vid,
+        "kind": kind,
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": file.content_type,
+        "size": result.get("size", len(data)),
+        "is_deleted": False,
+        "created_at": now_iso(),
+    })
+    # save URL ref on the video
+    field = "thumbnail_url" if kind == "thumbnail" else "voiceover_url"
+    public_path = f"/api/files/{result['path']}"
+    await db.videos.update_one({"id": vid}, {"$set": {field: public_path, "updated_at": now_iso()}})
+    return {"path": result["path"], "url": public_path}
+
+@api.get("/files/{path:path}")
+async def serve_file(path: str, auth: str = Query(None), authorization: str = Header(None)):
+    token = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]
+    elif auth:
+        token = auth
+    if not token:
+        raise HTTPException(401, "Missing token")
+    try:
+        jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+    rec = await db.files.find_one({"storage_path": path, "is_deleted": False})
+    if not rec:
+        raise HTTPException(404, "File not found")
+    data, ct = get_object(path)
+    return Response(content=data, media_type=rec.get("content_type", ct))
+
+# ---------- Script export ----------
+@api.get("/videos/{vid}/export")
+async def export_script(vid: str, fmt: str = Query("txt"), user: dict = Depends(get_current_user)):
+    v = await db.videos.find_one({"id": vid}, {"_id": 0})
+    if not v:
+        raise HTTPException(404, "Video not found")
+    script = v.get("script") or ""
+    if not script.strip():
+        raise HTTPException(400, "Script is empty — write one in the Claude chat first.")
+    safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in v["title"])[:60].strip() or "script"
+
+    if fmt == "txt":
+        content = f"{v['title']}\n{'='*len(v['title'])}\n\n{script}\n"
+        return StreamingResponse(
+            io.BytesIO(content.encode("utf-8")),
+            media_type="text/plain",
+            headers={"Content-Disposition": f'attachment; filename="{safe_title}.txt"'},
+        )
+    if fmt == "docx":
+        from docx import Document
+        doc = Document()
+        doc.add_heading(v["title"], level=1)
+        if v.get("hook"):
+            p = doc.add_paragraph()
+            p.add_run("Hook: ").bold = True
+            p.add_run(v["hook"])
+        doc.add_paragraph("")
+        for para in script.split("\n"):
+            doc.add_paragraph(para)
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{safe_title}.docx"'},
+        )
+    raise HTTPException(400, "fmt must be txt or docx")
+
 # ---------- Seed ----------
 SEED_IDEAS = [
     # Personal Finance India
@@ -591,6 +727,11 @@ app.add_middleware(
 @app.on_event("startup")
 async def on_start():
     await seed_admin_and_ideas()
+    try:
+        init_storage()
+        logger.info("Object storage initialized.")
+    except Exception as e:
+        logger.warning(f"Storage init deferred: {e}")
 
 @app.on_event("shutdown")
 async def on_stop():

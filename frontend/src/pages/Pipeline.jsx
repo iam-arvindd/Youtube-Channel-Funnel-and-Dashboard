@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { api, formatErr, API } from "@/lib/api";
 import Shell from "@/components/Shell";
-import { Plus, Sparkle, X, Trash, ChatCircleDots, FloppyDisk, PaperPlaneRight, Robot, ArrowsClockwise } from "@phosphor-icons/react";
+import { Plus, Sparkle, X, Trash, ChatCircleDots, FloppyDisk, PaperPlaneRight, Robot, ArrowsClockwise, UploadSimple, DownloadSimple, Image as ImageIcon, Microphone } from "@phosphor-icons/react";
 import { toast, Toaster } from "sonner";
 import ReactMarkdown from "react-markdown";
 
@@ -287,6 +287,9 @@ function VideoDrawer({ video, onClose }) {
         </>
       ) : (
         <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+          <ExportButtons videoId={v.id} hasScript={!!v.script}/>
+          <UploadRow videoId={v.id} kind="thumbnail" label="Thumbnail (PNG/JPG/WEBP)" accept="image/png,image/jpeg,image/webp" currentUrl={v.thumbnail_url} onDone={(url)=>setV({...v, thumbnail_url:url})}/>
+          <UploadRow videoId={v.id} kind="voiceover" label="Voiceover (MP3/WAV)" accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav" currentUrl={v.voiceover_url} onDone={(url)=>setV({...v, voiceover_url:url})}/>
           <Field label="Hook" value={v.hook} onSave={(val)=>saveField({hook:val})} testid="field-hook"/>
           <Field label="Script (auto-saved when you paste from Claude)" multiline value={v.script} onSave={(val)=>saveField({script:val})} testid="field-script"/>
           <Field label="Voiceover URL (ElevenLabs MP3)" value={v.voiceover_url} onSave={(val)=>saveField({voiceover_url:val})} testid="field-vo"/>
@@ -316,8 +319,7 @@ function Field({ label, value, onSave, multiline, testid, type="text" }) {
   );
 }
 
-function MessageBubble({ msg, streaming, onUseAsScript }) {
-  if (msg.role === "user") {
+function MessageBubble({ msg, streaming, onUseAsScript }) {  if (msg.role === "user") {
     return (
       <div className="flex justify-end">
         <div className="bg-[#00594C] text-white rounded-2xl rounded-tr-md px-4 py-3 max-w-[85%] text-sm leading-relaxed">{msg.content}</div>
@@ -339,3 +341,81 @@ function MessageBubble({ msg, streaming, onUseAsScript }) {
     </div>
   );
 }
+
+function UploadRow({ videoId, kind, label, accept, currentUrl, onDone }) {
+  const [busy, setBusy] = React.useState(false);
+  const inputRef = React.useRef(null);
+  const upload = async (file) => {
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const token = localStorage.getItem("fyt_token");
+      const res = await fetch(`${API}/videos/${videoId}/upload?kind=${kind}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        toast.error(`Upload failed: ${t.slice(0,150)}`);
+        return;
+      }
+      const data = await res.json();
+      onDone(data.url);
+      toast.success(`${label.split(" ")[0]} uploaded ✓`);
+    } catch (e) { toast.error(e.message); }
+    finally { setBusy(false); }
+  };
+  const token = localStorage.getItem("fyt_token");
+  const viewUrl = currentUrl ? `${process.env.REACT_APP_BACKEND_URL}${currentUrl}?auth=${token}` : null;
+  return (
+    <div>
+      <label className="text-[11px] uppercase tracking-[0.1em] font-semibold text-[#5C5C5C] flex items-center gap-2">
+        {kind === "thumbnail" ? <ImageIcon size={13}/> : <Microphone size={13}/>} {label}
+      </label>
+      <div className="mt-2 flex items-center gap-3">
+        <input ref={inputRef} type="file" accept={accept} className="hidden"
+          data-testid={`upload-${kind}`}
+          onChange={(e)=>e.target.files?.[0] && upload(e.target.files[0])}/>
+        <button onClick={()=>inputRef.current?.click()} disabled={busy}
+          className="btn-primary !py-2 !px-4 text-sm flex items-center gap-2 disabled:opacity-50">
+          <UploadSimple size={14}/> {busy ? "Uploading…" : currentUrl ? "Replace" : "Upload"}
+        </button>
+        {viewUrl && (kind === "thumbnail" ? (
+          <img src={viewUrl} alt="thumb" className="w-20 h-12 object-cover rounded-lg border border-black/5"/>
+        ) : (
+          <audio controls src={viewUrl} className="h-9"/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ExportButtons({ videoId, hasScript }) {
+  const download = async (fmt) => {
+    if (!hasScript) return toast.error("Save a script first (use Claude chat)");
+    const token = localStorage.getItem("fyt_token");
+    const res = await fetch(`${API}/videos/${videoId}/export?fmt=${fmt}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) { toast.error("Export failed"); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `script.${fmt}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <div className="flex items-center gap-2 p-3 rounded-xl bg-[#E5F2F0] border border-[#00594C]/15">
+      <DownloadSimple size={16} className="text-[#00594C]"/>
+      <span className="text-xs font-semibold text-[#00594C] flex-1">Export script for ElevenLabs / Docs:</span>
+      <button data-testid="export-txt" onClick={()=>download("txt")} className="text-xs font-bold text-[#00594C] hover:text-[#004036] uppercase tracking-[0.1em]">.txt</button>
+      <span className="text-[#00594C]/30">|</span>
+      <button data-testid="export-docx" onClick={()=>download("docx")} className="text-xs font-bold text-[#00594C] hover:text-[#004036] uppercase tracking-[0.1em]">.docx</button>
+    </div>
+  );
+}
+
